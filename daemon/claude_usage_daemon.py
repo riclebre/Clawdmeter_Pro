@@ -33,9 +33,12 @@ POLL_INTERVAL = 60
 TICK = 5
 CONNECT_TIMEOUT = 20.0
 
-# macOS: token lives in Keychain (service "Claude Code-credentials").
-# Linux: token lives in ~/.claude/.credentials.json.
-KEYCHAIN_SERVICE = "Claude Code-credentials"
+# macOS: token lives in a dedicated Keychain item written by the Clawdmeter
+# Companion menu bar app (see menubar/auth.py) — a one-year `claude
+# setup-token` token, decoupled from Claude Code CLI's own ~11h session so
+# this daemon never idles out waiting for someone to run `claude` by hand.
+# Linux: token lives in ~/.claude/.credentials.json (unaffected by this).
+KEYCHAIN_SERVICE = "Clawdmeter Companion"
 DEFAULT_CONFIG_DIR = Path.home() / ".claude"
 SAVED_ADDR_FILE = Path.home() / ".config" / "claude-usage-monitor" / "ble-address"
 CONFIG_FILE = Path.home() / ".config" / "claude-usage-monitor" / "config"
@@ -55,9 +58,12 @@ API_BODY = {
 
 
 class TokenExpired(Exception):
-    """Raised by poll_api on a 401/403 — the access token is dead. The daemon never
-    refreshes (pure free-ride: Claude Code owns refreshing), so the caller just
-    signals "No data" to the device until the CLI re-seeds the token."""
+    """Raised by poll_api on a 401/403 — the access token is dead. The daemon
+    never refreshes it itself: for the default macOS Keychain source that's
+    a one-year token only the Clawdmeter Companion app re-mints (see its
+    "Log in…" menu item); for the Linux/other-config-dir file source it's
+    still Claude Code's own CLI-managed credential, so the caller just
+    signals "No data" to the device until it's re-seeded."""
 
 
 def log(msg: str) -> None:
@@ -83,6 +89,9 @@ def _extract_access_token(blob: str) -> str | None:
         # direct: {"accessToken": "..."}
         if isinstance(data.get("accessToken"), str):
             return data["accessToken"]
+        # Clawdmeter Companion's own shape: {"token": "...", "mintedAt": ...}
+        if isinstance(data.get("token"), str):
+            return data["token"]
         # nested: {"claudeAiOauth": {"accessToken": "..."}}
         for v in data.values():
             if isinstance(v, dict) and isinstance(v.get("accessToken"), str):
@@ -756,13 +765,15 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
             elapsed = now - last_poll
             if session.refresh_requested.is_set() or elapsed >= POLL_INTERVAL:
                 session.refresh_requested.clear()
-                # Pure free-ride: read whatever access token(s) Claude Code
-                # currently holds across the configured config dirs and NEVER
-                # refresh them ourselves. Claude Code (the token's owner) does all
-                # refreshing; refreshing here would race its rotation and feed the
-                # OAuth endpoint's rate limit (429). When no dir has a usable token
-                # we signal "No data" so the device idles instead of holding stale
-                # numbers until the CLI re-seeds it.
+                # Read whatever access token(s) are currently held across the
+                # configured config dirs — we never mint or refresh one here.
+                # The default macOS source (Clawdmeter Companion's Keychain
+                # item) is a static one-year token with nothing to refresh;
+                # any other source is Claude Code's own CLI-managed
+                # credential, whose owner does all refreshing (racing it here
+                # would also feed the OAuth endpoint's rate limit, 429). When
+                # no dir has a usable token we signal "No data" so the device
+                # idles instead of holding stale numbers until it's re-seeded.
                 payload, dead = await poll_active()
                 if payload is not None:
                     if await session.write_payload(payload):
@@ -774,8 +785,8 @@ async def connect_and_run(target, stop_event: asyncio.Event) -> bool:
                     # last_poll on the write result (like the data path) so a
                     # failed beat retries next tick instead of throttling what may
                     # be a healthy link for a full POLL_INTERVAL.
-                    log("No usable token; signalling no-data to device — run "
-                        "`claude login` or use the CLI to let Claude Code renew it")
+                    log("No usable token; signalling no-data to device — open "
+                        "Clawdmeter Companion in the menu bar and click 'Log in…'")
                     if await session.write_payload({"ok": False}):
                         last_poll = time.time()
                 else:

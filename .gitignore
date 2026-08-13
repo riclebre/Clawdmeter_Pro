@@ -15,6 +15,9 @@ tools/package-lock.json
 # Mac daemon venv
 daemon/.venv/
 
+# Menu bar companion app venv
+menubar/.venv/
+
 # Python bytecode cache
 __pycache__/
 *.pyc

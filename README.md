@@ -1,6 +1,6 @@
-# Clawdmeter
+# Clawdmeter Pro
 
-A small ESP32 dashboard I made for my desk to keep an eye on Claude Code usage.
+A small ESP32 dashboard for the desk that keeps an eye on Claude Code usage — a private macOS-focused fork of [HermannBjorgvin/Clawdmeter](https://github.com/HermannBjorgvin/Clawdmeter), adding a menu bar companion app so the numbers show up on the Mac even when the physical display is off or out of Bluetooth range.
 
 It runs on a [Waveshare ESP32-S3-Touch-AMOLED-2.16](https://www.waveshare.com/esp32-s3-touch-amoled-2.16.htm?&aff_id=149786) as well as a few other alternative boards and pairs over Bluetooth, the splash screen plays pixel-art Clawd animations that get
 busier when your usage rate climbs. The two side buttons send Space and
@@ -11,6 +11,15 @@ Shift+Tab over BLE HID for Claude Code's voice mode and mode-toggle shortcuts.
 | ![Usage meter](assets/demo.jpeg) | ![Clawd animation screen](assets/demo.gif) |
 
 The Clawd animations come from [claudepix](https://claudepix.vercel.app), [@amaanbuilds](https://x.com/amaanbuilds)'s library of pixel-art Clawd sprites, check it out, it's lovely.
+
+## About this fork
+
+This fork is macOS-only in its host tooling (the Linux and Windows sections below are inherited from upstream, unmodified, and still work as documented — they just don't get the improvements in this section). Two things changed on top of the original project:
+
+- **A menu bar companion app** (`menubar/`) shows the same 5-hour and weekly numbers directly on the Mac, independent of the physical device — useful when you're on a laptop away from the desk, or the ESP32 is off.
+- **A one-year login token** replaces the original daemon's dependency on Claude Code CLI's own ~11-hour session. Both the menu bar app and the BLE daemon now read a token minted once via `claude setup-token`, stored in its own macOS Keychain item (`Clawdmeter Companion`) — separate from Claude Code's own credentials, and never committed anywhere. Anyone running this fork logs in with their own account; no credentials are baked into the code.
+
+See [Versioning](#versioning) at the bottom for where this is headed.
 
 ## Screens
 
@@ -66,7 +75,7 @@ After flashing, open **System Settings → Bluetooth** and click *Connect* next 
 
 ### Install the daemon
 
-The daemon reads your Claude OAuth token from the macOS Keychain (service `Claude Code-credentials`), polls usage every 60 s, and pushes it to the display over BLE.
+The daemon reads a Claude token from the macOS Keychain (service `Clawdmeter Companion` — see [About this fork](#about-this-fork)), polls usage every 60 s, and pushes it to the display over BLE.
 
 ```bash
 ./install-mac.sh
@@ -81,6 +90,25 @@ launchctl list | grep claude-usage                                          # ch
 tail -F ~/Library/Logs/claude-usage-daemon.out.log                          # live logs
 launchctl unload ~/Library/LaunchAgents/com.user.claude-usage-daemon.plist  # stop
 launchctl load -w ~/Library/LaunchAgents/com.user.claude-usage-daemon.plist # start
+```
+
+### Install the menu bar companion
+
+`menubar/` is a small [rumps](https://github.com/jaredks/rumps) app that shows the same 5-hour and weekly numbers in the Mac's menu bar, and is where you actually log in (the daemon above only *reads* the token this app stores). There's no installer script for it yet — v1 setup is manual:
+
+```bash
+cd menubar
+python3.13 -m venv .venv          # any Python 3.10+ interpreter works
+.venv/bin/pip install rumps httpx
+.venv/bin/python app.py           # first run — click "Log in…" in the menu
+```
+
+Clicking **Log in…** opens Terminal and runs `claude setup-token`, which walks you through a browser approval and mints a token good for about a year — no daily re-login. The app picks it up automatically and stores it in its own Keychain item; if the automatic capture ever misses it, use **Paste token manually…** instead.
+
+To have it launch at login (survives reboot, like the daemon), render a LaunchAgent the same way `install-mac.sh` does for the daemon — see `menubar/com.user.clawdmeter-companion.plist` for the template and swap in your own paths, then:
+
+```bash
+launchctl load -w ~/Library/LaunchAgents/com.user.clawdmeter-companion.plist
 ```
 
 ## Linux installation
@@ -188,7 +216,7 @@ reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v Clawdmeter /f
 
 ## How it works
 
-1. The daemon reads your Claude Code OAuth token — from the macOS Keychain (service `Claude Code-credentials`) on macOS, or from `~/.claude/.credentials.json` on Linux (`%USERPROFILE%\.claude\.credentials.json` on Windows).
+1. The daemon reads a Claude token — from the macOS Keychain (service `Clawdmeter Companion`, minted via the menu bar app's `claude setup-token` login) on macOS, or from `~/.claude/.credentials.json` on Linux (`%USERPROFILE%\.claude\.credentials.json` on Windows, both still Claude Code CLI's own short-lived credential in this fork).
 2. It makes a minimal API call to `api.anthropic.com/v1/messages` — one token of Haiku, basically free.
 3. The usage numbers come straight out of the response headers (`anthropic-ratelimit-unified-5h-utilization` and friends).
 4. The daemon connects to the ESP32 over BLE and writes a JSON payload to the GATT RX characteristic.
@@ -293,6 +321,17 @@ pio run -d firmware -t upload
 ```
 
 See `tools/README.md` for details.
+
+## Versioning
+
+This fork is **v1**: the menu bar companion app and the long-lived login token, on top of an otherwise-unmodified upstream Clawdmeter. The firmware, splash animations, and physical device behavior are exactly upstream's.
+
+Ideas for later versions, roughly in the order I'll probably get to them:
+
+- **v2** — new/custom splash animations, beyond the current claudepix set
+- **v3+** — more device-side features (open to ideas as they come up)
+
+No fixed release cadence — this is a personal project, versions land when they land.
 
 ## Credits
 
